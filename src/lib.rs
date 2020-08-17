@@ -27,18 +27,18 @@
 #![deny(missing_docs)]
 
 extern crate bitcoin_hashes;
-extern crate unicode_normalization;
 #[cfg(feature = "rand")]
 extern crate rand;
+extern crate unicode_normalization;
 
-use std::{error, fmt, str};
 use std::borrow::Cow;
+use std::{error, fmt, str};
 
 use bitcoin_hashes::{sha256, Hash};
 use unicode_normalization::UnicodeNormalization;
 
+mod kdf;
 mod language;
-mod pbkdf2;
 
 pub use language::Language;
 
@@ -50,50 +50,56 @@ const IDEOGRAPHIC_SPACE: char = '　';
 /// A BIP39 error.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Error {
-	/// Mnemonic has a word count that is not a multiple of 6.
-	BadWordCount(usize),
-	/// Mnemonic contains an unknown word.
-	UnknownWord(String),
-	/// Entropy was not a multiple of 32 bits or between 128-256n bits in length.
-	BadEntropyBitCount(usize),
-	/// The mnemonic has an invalid checksum.
-	InvalidChecksum,
-	/// The word list can be interpreted as multiple languages.
-	AmbiguousWordList(Vec<Language>),
+    /// Mnemonic has a word count that is not a multiple of 6.
+    BadWordCount(usize),
+    /// Mnemonic contains an unknown word.
+    UnknownWord(String),
+    /// Entropy was not a multiple of 32 bits or between 128-256n bits in length.
+    BadEntropyBitCount(usize),
+    /// The mnemonic has an invalid checksum.
+    InvalidChecksum,
+    /// The word list can be interpreted as multiple languages.
+    AmbiguousWordList(Vec<Language>),
 }
 
 impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			Error::BadWordCount(c) => write!(f,
-				"mnemonic has a word count that is not a multiple of 6: {}", c,
-			),
-			Error::UnknownWord(ref w) => write!(f,
-				"mnemonic contains an unknown word: {} ({})",
-				w, bitcoin_hashes::hex::ToHex::to_hex(w.as_bytes()),
-			),
-			Error::BadEntropyBitCount(c) => write!(f,
-				"entropy was not between 128-256 bits or not a multiple of 32 bits: {} bits", c,
-			),
-			Error::InvalidChecksum => write!(f, "the mnemonic has an invalid checksum"),
-			Error::AmbiguousWordList(ref langs) => write!(f, "ambiguous word list: {:?}", langs),
-		}
-	}
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::BadWordCount(c) => write!(
+                f,
+                "mnemonic has a word count that is not a multiple of 6: {}",
+                c,
+            ),
+            Error::UnknownWord(ref w) => write!(
+                f,
+                "mnemonic contains an unknown word: {} ({})",
+                w,
+                bitcoin_hashes::hex::ToHex::to_hex(w.as_bytes()),
+            ),
+            Error::BadEntropyBitCount(c) => write!(
+                f,
+                "entropy was not between 128-256 bits or not a multiple of 32 bits: {} bits",
+                c,
+            ),
+            Error::InvalidChecksum => write!(f, "the mnemonic has an invalid checksum"),
+            Error::AmbiguousWordList(ref langs) => write!(f, "ambiguous word list: {:?}", langs),
+        }
+    }
 }
 impl fmt::Debug for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		fmt::Display::fmt(self, f)
-	}
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl error::Error for Error {
-	fn cause(&self) -> Option<&error::Error> {
-		None
-	}
+    fn cause(&self) -> Option<&error::Error> {
+        None
+    }
 
-	fn description(&self) -> &str {
-		"description() is deprecated; use Display"
-	}
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
 }
 
 /// A mnemonic code.
@@ -108,291 +114,293 @@ pub struct Mnemonic(String);
 // The content of the mnemonic is ensured to be NFKD-normalized UTF-8.
 
 impl Mnemonic {
-	/// Ensure the content of the [Cow] is normalized UTF8.
-	/// Performing this on a [Cow] means that all allocations for normalization
-	/// can be avoided for languages without special UTF8 characters.
-	#[inline]
-	fn normalize_utf8_cow<'a>(cow: &mut Cow<'a, str>) {
-		let is_nfkd = unicode_normalization::is_nfkd_quick(cow.as_ref().chars());
-		if is_nfkd != unicode_normalization::IsNormalized::Yes {
-			*cow = Cow::Owned(cow.as_ref().nfkd().to_string());
-		}
-	}
+    /// Ensure the content of the [Cow] is normalized UTF8.
+    /// Performing this on a [Cow] means that all allocations for normalization
+    /// can be avoided for languages without special UTF8 characters.
+    #[inline]
+    fn normalize_utf8_cow<'a>(cow: &mut Cow<'a, str>) {
+        let is_nfkd = unicode_normalization::is_nfkd_quick(cow.as_ref().chars());
+        if is_nfkd != unicode_normalization::IsNormalized::Yes {
+            *cow = Cow::Owned(cow.as_ref().nfkd().to_string());
+        }
+    }
 
-	/// Create a new [Mnemonic] in the specified language from the given entropy.
-	/// Entropy must be a multiple of 32 bits (4 bytes) and 128-256 bits in length.
-	pub fn from_entropy_in(language: Language, entropy: &[u8]) -> Result<Mnemonic, Error> {
-		if entropy.len() % 4 != 0 {
-			return Err(Error::BadEntropyBitCount(entropy.len() * 8));
-		}
+    /// Create a new [Mnemonic] in the specified language from the given entropy.
+    /// Entropy must be a multiple of 32 bits (4 bytes) and 128-256 bits in length.
+    pub fn from_entropy_in(language: Language, entropy: &[u8]) -> Result<Mnemonic, Error> {
+        if entropy.len() % 4 != 0 {
+            return Err(Error::BadEntropyBitCount(entropy.len() * 8));
+        }
 
-		if (entropy.len() * 8) < 128 || (entropy.len() * 8) > 256 {
-			return Err(Error::BadEntropyBitCount(entropy.len() * 8));
-		}
+        if (entropy.len() * 8) < 128 || (entropy.len() * 8) > 256 {
+            return Err(Error::BadEntropyBitCount(entropy.len() * 8));
+        }
 
-		let check = sha256::Hash::hash(&entropy);
-		let mut bits = vec![false; entropy.len() * 8 + entropy.len() / 4];
-		for i in 0..entropy.len() {
-			for j in 0..8 {
-				bits[i * 8 + j] = (entropy[i] & (1 << (7 - j))) > 0;
-			}
-		}
-		for i in 0..entropy.len() / 4 {
-			bits[8 * entropy.len() + i] = (check[i / 8] & (1 << (7 - (i % 8)))) > 0;
-		}
-		let mlen = entropy.len() * 3 / 4;
-		let mut words = Vec::new();
-		for i in 0..mlen {
-			let mut idx = 0;
-			for j in 0..11 {
-				if bits[i * 11 + j] {
-					idx += 1 << (10 - j);
-				}
-			}
-			words.push(language.word_list()[idx]);
-		}
+        let check = sha256::Hash::hash(&entropy);
+        let mut bits = vec![false; entropy.len() * 8 + entropy.len() / 4];
+        for i in 0..entropy.len() {
+            for j in 0..8 {
+                bits[i * 8 + j] = (entropy[i] & (1 << (7 - j))) > 0;
+            }
+        }
+        for i in 0..entropy.len() / 4 {
+            bits[8 * entropy.len() + i] = (check[i / 8] & (1 << (7 - (i % 8)))) > 0;
+        }
+        let mlen = entropy.len() * 3 / 4;
+        let mut words = Vec::new();
+        for i in 0..mlen {
+            let mut idx = 0;
+            for j in 0..11 {
+                if bits[i * 11 + j] {
+                    idx += 1 << (10 - j);
+                }
+            }
+            words.push(language.word_list()[idx]);
+        }
 
-		Ok(Mnemonic(words.join(" ")))
-	}
+        Ok(Mnemonic(words.join(" ")))
+    }
 
-	/// Create a new English [Mnemonic] in from the given entropy.
-	/// Entropy must be a multiple of 32 bits (4 bytes) and 128-256 bits in length.
-	pub fn from_entropy(entropy: &[u8]) -> Result<Mnemonic, Error> {
-		Mnemonic::from_entropy_in(Language::English, entropy)
-	}
+    /// Create a new English [Mnemonic] in from the given entropy.
+    /// Entropy must be a multiple of 32 bits (4 bytes) and 128-256 bits in length.
+    pub fn from_entropy(entropy: &[u8]) -> Result<Mnemonic, Error> {
+        Mnemonic::from_entropy_in(Language::English, entropy)
+    }
 
-	/// Generate a new Mnemonic in the given language.
-	/// For the different supported word counts, see documentation on [Mnemonoc].
-	#[cfg(feature = "rand")]
-	pub fn generate_in(language: Language, word_count: usize) -> Result<Mnemonic, Error> {
-		if word_count < 6 || word_count % 6 != 0 || word_count > 24 {
-			return Err(Error::BadWordCount(word_count));
-		}
+    /// Generate a new Mnemonic in the given language.
+    /// For the different supported word counts, see documentation on [Mnemonoc].
+    #[cfg(feature = "rand")]
+    pub fn generate_in(language: Language, word_count: usize) -> Result<Mnemonic, Error> {
+        if word_count < 6 || word_count % 6 != 0 || word_count > 24 {
+            return Err(Error::BadWordCount(word_count));
+        }
 
-		let entropy_bytes = (word_count / 3) * 4;
-		let mut rng = rand::thread_rng();
-		let mut entropy = vec![0u8; entropy_bytes];
-		rand::RngCore::fill_bytes(&mut rng, &mut entropy);
-		Mnemonic::from_entropy_in(language, &entropy)
-	}
+        let entropy_bytes = (word_count / 3) * 4;
+        let mut rng = rand::thread_rng();
+        let mut entropy = vec![0u8; entropy_bytes];
+        rand::RngCore::fill_bytes(&mut rng, &mut entropy);
+        Mnemonic::from_entropy_in(language, &entropy)
+    }
 
-	/// Generate a new Mnemonic in English.
-	/// For the different supported word counts, see documentation on [Mnemonoc].
-	#[cfg(feature = "rand")]
-	pub fn generate(word_count: usize) -> Result<Mnemonic, Error> {
-		Mnemonic::generate_in(Language::English, word_count)
-	}
+    /// Generate a new Mnemonic in English.
+    /// For the different supported word counts, see documentation on [Mnemonoc].
+    #[cfg(feature = "rand")]
+    pub fn generate(word_count: usize) -> Result<Mnemonic, Error> {
+        Mnemonic::generate_in(Language::English, word_count)
+    }
 
-	/// Static method to validate a mnemonic in a given language.
-	pub fn validate_in(language: Language, s: &str) -> Result<(), Error> {
-		let words: Vec<&str> = s.split_whitespace().collect();
-		if words.len() < 6 || words.len() % 6 != 0 || words.len() > 24 {
-			return Err(Error::BadWordCount(words.len()));
-		}
+    /// Static method to validate a mnemonic in a given language.
+    pub fn validate_in(language: Language, s: &str) -> Result<(), Error> {
+        let words: Vec<&str> = s.split_whitespace().collect();
+        if words.len() < 6 || words.len() % 6 != 0 || words.len() > 24 {
+            return Err(Error::BadWordCount(words.len()));
+        }
 
-		let mut bits = vec![false; words.len() * 11];
-		for (i, word) in words.iter().enumerate() {
-			if let Some(idx) = language.find_word(word) {
-				for j in 0..11 {
-					bits[i * 11 + j] = idx >> (10 - j) & 1 == 1;
-				}
-			} else {
-				return Err(Error::UnknownWord(word.to_string()));
-			}
-		}
+        let mut bits = vec![false; words.len() * 11];
+        for (i, word) in words.iter().enumerate() {
+            if let Some(idx) = language.find_word(word) {
+                for j in 0..11 {
+                    bits[i * 11 + j] = idx >> (10 - j) & 1 == 1;
+                }
+            } else {
+                return Err(Error::UnknownWord(word.to_string()));
+            }
+        }
 
-		// Verify the checksum.
-		let mut entropy = vec![0u8; bits.len() / 33 * 4];
-		for i in 0..entropy.len() {
-			for j in 0..8 {
-				if bits[i * 8 + j] {
-					entropy[i] += 1 << (7 - j);
-				}
-			}
-		}
-		let check = sha256::Hash::hash(&entropy);
-		for i in 0..entropy.len() / 4 {
-			if bits[8 * entropy.len() + i] != ((check[i / 8] & (1 << (7 - (i % 8)))) > 0) {
-				return Err(Error::InvalidChecksum);
-			}
-		}
-		Ok(())
-	}
+        // Verify the checksum.
+        let mut entropy = vec![0u8; bits.len() / 33 * 4];
+        for i in 0..entropy.len() {
+            for j in 0..8 {
+                if bits[i * 8 + j] {
+                    entropy[i] += 1 << (7 - j);
+                }
+            }
+        }
+        let check = sha256::Hash::hash(&entropy);
+        for i in 0..entropy.len() / 4 {
+            if bits[8 * entropy.len() + i] != ((check[i / 8] & (1 << (7 - (i % 8)))) > 0) {
+                return Err(Error::InvalidChecksum);
+            }
+        }
+        Ok(())
+    }
 
-	/// Determine the language of the mnemonic.
-	///
-	/// NOTE: This method only guarantees that the returned language is the
-	/// correct language on the assumption that the mnemonic is valid.
-	/// It does not itself validate the mnemonic.
-	///
-	/// Some word lists don't guarantee that their words don't occur in other
-	/// word lists. In the extremely unlikely case that a word list can be
-	/// interpreted in multiple languages, an [Error::AmbiguousWordList] is
-	/// returned, containing the possible languages.
-	pub fn language_of(s: &str) -> Result<Language, Error> {
-		// First we try wordlists that have guaranteed unique words.
-		let first_word = s.split_whitespace().next().unwrap();
-		if first_word.len() == 0 {
-			return Err(Error::BadWordCount(0));
-		}
-		for language in Language::all().iter().filter(|l| l.unique_words()) {
-			if language.find_word(first_word).is_some() {
-				return Ok(*language);
-			}
-		}
+    /// Determine the language of the mnemonic.
+    ///
+    /// NOTE: This method only guarantees that the returned language is the
+    /// correct language on the assumption that the mnemonic is valid.
+    /// It does not itself validate the mnemonic.
+    ///
+    /// Some word lists don't guarantee that their words don't occur in other
+    /// word lists. In the extremely unlikely case that a word list can be
+    /// interpreted in multiple languages, an [Error::AmbiguousWordList] is
+    /// returned, containing the possible languages.
+    pub fn language_of(s: &str) -> Result<Language, Error> {
+        // First we try wordlists that have guaranteed unique words.
+        let first_word = s.split_whitespace().next().unwrap();
+        if first_word.len() == 0 {
+            return Err(Error::BadWordCount(0));
+        }
+        for language in Language::all().iter().filter(|l| l.unique_words()) {
+            if language.find_word(first_word).is_some() {
+                return Ok(*language);
+            }
+        }
 
-		// If that didn't work, we start with all possible languages
-		// (those without unique words), and eliminate until there is
-		// just one left.
-		let mut langs: Vec<_> =
-			Language::all().iter().filter(|l| !l.unique_words()).cloned().collect();
-		for word in s.split_whitespace() {
-			langs.retain(|l| l.find_word(word).is_some());
+        // If that didn't work, we start with all possible languages
+        // (those without unique words), and eliminate until there is
+        // just one left.
+        let mut langs: Vec<_> = Language::all()
+            .iter()
+            .filter(|l| !l.unique_words())
+            .cloned()
+            .collect();
+        for word in s.split_whitespace() {
+            langs.retain(|l| l.find_word(word).is_some());
 
-			// If there is just one language left, return it.
-			if langs.len() == 1 {
-				return Ok(langs[0]);
-			}
+            // If there is just one language left, return it.
+            if langs.len() == 1 {
+                return Ok(langs[0]);
+            }
 
-			// If all languages were eliminated, it's an invalid word.
-			if langs.is_empty() {
-				return Err(Error::UnknownWord(word.to_owned()))
-			}
-		}
-		Err(Error::AmbiguousWordList(langs))
-	}
+            // If all languages were eliminated, it's an invalid word.
+            if langs.is_empty() {
+                return Err(Error::UnknownWord(word.to_owned()));
+            }
+        }
+        Err(Error::AmbiguousWordList(langs))
+    }
 
-	/// Parse a mnemonic and detect the language from the enabled languages.
-	pub fn parse<'a, S: Into<Cow<'a, str>>>(s: S) -> Result<Mnemonic, Error> {
-		let mut cow = s.into();
-		Mnemonic::normalize_utf8_cow(&mut cow);
-		let language = Mnemonic::language_of(cow.as_ref())?;
-		Mnemonic::validate_in(language, cow.as_ref())?;
-		Ok(Mnemonic(cow.into_owned()))
-	}
+    /// Parse a mnemonic and detect the language from the enabled languages.
+    pub fn parse<'a, S: Into<Cow<'a, str>>>(s: S) -> Result<Mnemonic, Error> {
+        let mut cow = s.into();
+        Mnemonic::normalize_utf8_cow(&mut cow);
+        let language = Mnemonic::language_of(cow.as_ref())?;
+        Mnemonic::validate_in(language, cow.as_ref())?;
+        Ok(Mnemonic(cow.into_owned()))
+    }
 
-	/// Parse a mnemonic in the given language.
-	pub fn parse_in<'a, S: Into<Cow<'a, str>>>(language: Language, s: S) -> Result<Mnemonic, Error> {
-		let mut cow = s.into();
-		Mnemonic::normalize_utf8_cow(&mut cow);
-		Mnemonic::validate_in(language, cow.as_ref())?;
-		Ok(Mnemonic(cow.into_owned()))
-	}
+    /// Parse a mnemonic in the given language.
+    pub fn parse_in<'a, S: Into<Cow<'a, str>>>(
+        language: Language,
+        s: S,
+    ) -> Result<Mnemonic, Error> {
+        let mut cow = s.into();
+        Mnemonic::normalize_utf8_cow(&mut cow);
+        Mnemonic::validate_in(language, cow.as_ref())?;
+        Ok(Mnemonic(cow.into_owned()))
+    }
 
-	/// Get the mnemonic as a [&str].
-	pub fn as_str(&self) -> &str {
-		&self.0
-	}
+    /// Get the mnemonic as a [&str].
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
-	/// Get the number of words in the mnemonic.
-	pub fn word_count(&self) -> usize {
-		self.as_str().split_whitespace().count()
-	}
+    /// Get the number of words in the mnemonic.
+    pub fn word_count(&self) -> usize {
+        self.as_str().split_whitespace().count()
+    }
 
-	/// Convert to seed bytes.
-	pub fn to_seed(&self, passphrase: &str) -> Vec<u8> {
-		const PBKDF2_ROUNDS: usize = 2048;
-		const PBKDF2_BYTES: usize = 64;
+    /// Convert to seed bytes.
+    pub fn to_seed(&self, passphrase: &str) -> Vec<u8> {
+        const PBKDF2_ROUNDS: usize = 10000;
+        const PBKDF2_BYTES: usize = 64;
 
-		let normalized_salt_cow = {
-			let mut cow = Cow::Owned(format!("mnemonic{}", passphrase));
-			Mnemonic::normalize_utf8_cow(&mut cow);
-			cow
-		};
-		let normalized_mnemonic_cow = {
-			let mut cow: Cow<str> = Cow::Borrowed(self.as_str());
-			Mnemonic::normalize_utf8_cow(&mut cow);
-			cow
-		};
-		let mut seed = vec![0u8; PBKDF2_BYTES];
-		pbkdf2::pbkdf2(
-			&normalized_mnemonic_cow.as_ref().as_bytes(),
-			&normalized_salt_cow.as_ref().as_bytes(),
-			PBKDF2_ROUNDS,
-			&mut seed,
-		);
-		seed
-	}
+        let normalized_salt_cow = {
+            let mut cow = Cow::Owned(format!("mnemonic{}", passphrase));
+            Mnemonic::normalize_utf8_cow(&mut cow);
+            cow
+        };
+        let normalized_mnemonic_cow = {
+            let mut cow: Cow<str> = Cow::Borrowed(self.as_str());
+            Mnemonic::normalize_utf8_cow(&mut cow);
+            cow
+        };
+        kdf::argon(
+            &normalized_mnemonic_cow.as_ref().as_bytes(),
+            &normalized_salt_cow.as_ref().as_bytes(),
+        )
+    }
 
-	/// Convert the mnemonic back to the entropy used to generate it.
-	pub fn to_entropy(&self) -> Vec<u8> {
-		// We unwrap errors here because this method can only be called on
-		// values that were already previously validated.
+    /// Convert the mnemonic back to the entropy used to generate it.
+    pub fn to_entropy(&self) -> Vec<u8> {
+        // We unwrap errors here because this method can only be called on
+        // values that were already previously validated.
 
-		let language = Mnemonic::language_of(self.as_str()).unwrap();
+        let language = Mnemonic::language_of(self.as_str()).unwrap();
 
-		// Preallocate enough space for the longest possible word list
-		let mut entropy = Vec::with_capacity(33);
-		let mut offset = 0;
-		let mut remainder = 0;
+        // Preallocate enough space for the longest possible word list
+        let mut entropy = Vec::with_capacity(33);
+        let mut offset = 0;
+        let mut remainder = 0;
 
-		let words: Vec<&str> = self.as_str().split_whitespace().collect();
-		for word in &words {
-			let idx = language.find_word(word).unwrap();
+        let words: Vec<&str> = self.as_str().split_whitespace().collect();
+        for word in &words {
+            let idx = language.find_word(word).unwrap();
 
-			remainder |= ((idx as u32) << (32 - 11)) >> offset;
-			offset += 11;
+            remainder |= ((idx as u32) << (32 - 11)) >> offset;
+            offset += 11;
 
-			while offset >= 8 {
-				entropy.push((remainder >> 24) as u8);
-				remainder <<= 8;
-				offset -= 8;
-			}
-		}
+            while offset >= 8 {
+                entropy.push((remainder >> 24) as u8);
+                remainder <<= 8;
+                offset -= 8;
+            }
+        }
 
-		if offset != 0 {
-			entropy.push((remainder >> 24) as u8);
-		}
+        if offset != 0 {
+            entropy.push((remainder >> 24) as u8);
+        }
 
-		// Truncate to get rid of the byte containing the checksum
-		let entropy_bytes = (words.len() / 3) * 4;
-		entropy.truncate(entropy_bytes);
-		entropy
-	}
+        // Truncate to get rid of the byte containing the checksum
+        let entropy_bytes = (words.len() / 3) * 4;
+        entropy.truncate(entropy_bytes);
+        entropy
+    }
 }
 
 impl fmt::Display for Mnemonic {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		f.write_str(self.as_str())
-	}
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl str::FromStr for Mnemonic {
-	type Err = Error;
+    type Err = Error;
 
-	fn from_str(s: &str) -> Result<Mnemonic, Error> {
-		Mnemonic::parse(s)
-	}
+    fn from_str(s: &str) -> Result<Mnemonic, Error> {
+        Mnemonic::parse(s)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	use bitcoin_hashes::hex::FromHex;
+    use bitcoin_hashes::hex::FromHex;
 
-	#[cfg(feature = "rand")]
-	#[test]
-	fn test_bit_counts() {
-		let _ = Mnemonic::generate(12).unwrap();
-		let _ = Mnemonic::generate(18).unwrap();
-		let _ = Mnemonic::generate(24).unwrap();
-	}
+    #[cfg(feature = "rand")]
+    #[test]
+    fn test_bit_counts() {
+        let _ = Mnemonic::generate(12).unwrap();
+        let _ = Mnemonic::generate(18).unwrap();
+        let _ = Mnemonic::generate(24).unwrap();
+    }
 
-	#[cfg(feature = "rand")]
-	#[test]
-	fn test_language_of() {
-		for lang in Language::all() {
-			let m = Mnemonic::generate_in(*lang, 24).unwrap();
-			assert_eq!(*lang, Mnemonic::language_of(m.as_str()).unwrap());
-		}
-	}
+    #[cfg(feature = "rand")]
+    #[test]
+    fn test_language_of() {
+        for lang in Language::all() {
+            let m = Mnemonic::generate_in(*lang, 24).unwrap();
+            assert_eq!(*lang, Mnemonic::language_of(m.as_str()).unwrap());
+        }
+    }
 
-	#[test]
-	fn test_vectors_english() {
-		// These vectors are tuples of
-		// (entropy, mnemonic, seed)
-		let test_vectors = [
+    #[test]
+    fn test_vectors_english() {
+        // These vectors are tuples of
+        // (entropy, mnemonic, seed)
+        let test_vectors = [
 			(
 				"00000000000000000000000000000000",
 				"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
@@ -515,85 +523,105 @@ mod tests {
 			)
 		];
 
-		for vector in &test_vectors {
-			let entropy = Vec::<u8>::from_hex(&vector.0).unwrap();
-			let mnemonic_str = vector.1;
-			let seed = Vec::<u8>::from_hex(&vector.2).unwrap();
-			
-			let mnemonic = Mnemonic::from_entropy(&entropy).unwrap();
+        for vector in &test_vectors {
+            let entropy = Vec::<u8>::from_hex(&vector.0).unwrap();
+            let mnemonic_str = vector.1;
+            let seed = Vec::<u8>::from_hex(&vector.2).unwrap();
 
-			assert_eq!(&mnemonic.to_string(), mnemonic_str,
-				"failed vector: {}", mnemonic_str);
-			assert_eq!(mnemonic, Mnemonic::parse_in(Language::English, mnemonic_str).unwrap(),
-				"failed vector: {}", mnemonic_str);
-			assert_eq!(mnemonic, Mnemonic::parse(mnemonic_str).unwrap(),
-				"failed vector: {}", mnemonic_str);
-			assert_eq!(&entropy, &mnemonic.to_entropy(),
-				"failed vector: {}", mnemonic_str);
-			assert_eq!(&seed, &mnemonic.to_seed("TREZOR"),
-				"failed vector: {}", mnemonic_str);
-		}
-	}
+            let mnemonic = Mnemonic::from_entropy(&entropy).unwrap();
 
-	#[test]
-	fn test_invalid_engish() {
-		// correct phrase:
-		// "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+            assert_eq!(
+                &mnemonic.to_string(),
+                mnemonic_str,
+                "failed vector: {}",
+                mnemonic_str
+            );
+            assert_eq!(
+                mnemonic,
+                Mnemonic::parse_in(Language::English, mnemonic_str).unwrap(),
+                "failed vector: {}",
+                mnemonic_str
+            );
+            assert_eq!(
+                mnemonic,
+                Mnemonic::parse(mnemonic_str).unwrap(),
+                "failed vector: {}",
+                mnemonic_str
+            );
+            assert_eq!(
+                &entropy,
+                &mnemonic.to_entropy(),
+                "failed vector: {}",
+                mnemonic_str
+            );
+            assert_eq!(
+                &seed,
+                &mnemonic.to_seed("TREZOR"),
+                "failed vector: {}",
+                mnemonic_str
+            );
+        }
+    }
 
-		assert_eq!(
-			Mnemonic::parse(
-				"getter advice cage absurd amount doctor acoustic avoid letter advice cage above",
-			),
-			Err(Error::UnknownWord("getter".to_owned()))
-		);
+    #[test]
+    fn test_invalid_engish() {
+        // correct phrase:
+        // "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
 
-		assert_eq!(
-			Mnemonic::parse(
-				"advice cage absurd amount doctor acoustic avoid letter advice cage above",
-			),
-			Err(Error::BadWordCount(11))
-		);
+        assert_eq!(
+            Mnemonic::parse(
+                "getter advice cage absurd amount doctor acoustic avoid letter advice cage above",
+            ),
+            Err(Error::UnknownWord("getter".to_owned()))
+        );
 
-		assert_eq!(
-			Mnemonic::parse(
-				"primary advice cage absurd amount doctor acoustic avoid letter advice cage above",
-			),
-			Err(Error::InvalidChecksum)
-		);
-	}
+        assert_eq!(
+            Mnemonic::parse(
+                "advice cage absurd amount doctor acoustic avoid letter advice cage above",
+            ),
+            Err(Error::BadWordCount(11))
+        );
 
-	#[test]
-	fn test_invalid_entropy() {
-		//between 128 and 256 bits, but not divisible by 32
-		assert_eq!(
-			Mnemonic::from_entropy(&vec![b'x'; 17]),
-			Err(Error::BadEntropyBitCount(136))
-		);
+        assert_eq!(
+            Mnemonic::parse(
+                "primary advice cage absurd amount doctor acoustic avoid letter advice cage above",
+            ),
+            Err(Error::InvalidChecksum)
+        );
+    }
 
-		//less than 128 bits
-		assert_eq!(
-			Mnemonic::from_entropy(&vec![b'x'; 4]),
-			Err(Error::BadEntropyBitCount(32))
-		);
+    #[test]
+    fn test_invalid_entropy() {
+        //between 128 and 256 bits, but not divisible by 32
+        assert_eq!(
+            Mnemonic::from_entropy(&vec![b'x'; 17]),
+            Err(Error::BadEntropyBitCount(136))
+        );
 
-		//greater than 256 bits
-		assert_eq!(
-			Mnemonic::from_entropy(&vec![b'x'; 36]),
-			Err(Error::BadEntropyBitCount(288))
-		);
-	}
+        //less than 128 bits
+        assert_eq!(
+            Mnemonic::from_entropy(&vec![b'x'; 4]),
+            Err(Error::BadEntropyBitCount(32))
+        );
 
-	#[cfg(feature = "japanese")]
-	#[test]
-	fn test_vectors_japanese() {
-		//! Test some Japanese language test vectors.
-		//! For these test vectors, we seem to generate different mnemonic phrases than the test
-		//! vectors expect us to. However, our generated seeds are correct and tiny-bip39,
-		//! an alternative implementation of bip39 also does not fulfill the test vectors.
+        //greater than 256 bits
+        assert_eq!(
+            Mnemonic::from_entropy(&vec![b'x'; 36]),
+            Err(Error::BadEntropyBitCount(288))
+        );
+    }
 
-		// These vectors are tuples of
-		// (entropy, mnemonic, passphrase, seed)
-		let vectors = [
+    #[cfg(feature = "japanese")]
+    #[test]
+    fn test_vectors_japanese() {
+        //! Test some Japanese language test vectors.
+        //! For these test vectors, we seem to generate different mnemonic phrases than the test
+        //! vectors expect us to. However, our generated seeds are correct and tiny-bip39,
+        //! an alternative implementation of bip39 also does not fulfill the test vectors.
+
+        // These vectors are tuples of
+        // (entropy, mnemonic, passphrase, seed)
+        let vectors = [
 			(
 				"00000000000000000000000000000000",
 				"あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あおぞら",
@@ -740,24 +768,32 @@ mod tests {
 			)
 		];
 
-		for vector in &vectors {
-			let entropy = Vec::<u8>::from_hex(&vector.0).unwrap();
-			let mnemonic_str = vector.1;
-			let passphrase = vector.2;
-			let seed = Vec::<u8>::from_hex(&vector.3).unwrap();
-			
-			let mnemonic = Mnemonic::from_entropy_in(Language::Japanese, &entropy).unwrap();
-			assert_eq!(seed, &mnemonic.to_seed(passphrase)[..],
-				"failed vector: {}", mnemonic_str);
+        for vector in &vectors {
+            let entropy = Vec::<u8>::from_hex(&vector.0).unwrap();
+            let mnemonic_str = vector.1;
+            let passphrase = vector.2;
+            let seed = Vec::<u8>::from_hex(&vector.3).unwrap();
 
-			let rt = Mnemonic::parse_in(Language::Japanese, mnemonic.as_str())
-				.expect(&format!("vector: {}", mnemonic_str));
-			assert_eq!(seed, &rt.to_seed(passphrase)[..]);
+            let mnemonic = Mnemonic::from_entropy_in(Language::Japanese, &entropy).unwrap();
+            assert_eq!(
+                seed,
+                &mnemonic.to_seed(passphrase)[..],
+                "failed vector: {}",
+                mnemonic_str
+            );
 
-			let mnemonic = Mnemonic::parse_in(Language::Japanese, mnemonic_str)
-				.expect(&format!("vector: {}", mnemonic_str));
-			assert_eq!(seed, &mnemonic.to_seed(passphrase)[..],
-				"failed vector: {}", mnemonic_str);
-		}
-	}
+            let rt = Mnemonic::parse_in(Language::Japanese, mnemonic.as_str())
+                .expect(&format!("vector: {}", mnemonic_str));
+            assert_eq!(seed, &rt.to_seed(passphrase)[..]);
+
+            let mnemonic = Mnemonic::parse_in(Language::Japanese, mnemonic_str)
+                .expect(&format!("vector: {}", mnemonic_str));
+            assert_eq!(
+                seed,
+                &mnemonic.to_seed(passphrase)[..],
+                "failed vector: {}",
+                mnemonic_str
+            );
+        }
+    }
 }
