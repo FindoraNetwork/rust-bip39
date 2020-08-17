@@ -303,9 +303,6 @@ impl Mnemonic {
 
     /// Convert to seed bytes.
     pub fn to_seed(&self, passphrase: &str) -> Vec<u8> {
-        const PBKDF2_ROUNDS: usize = 10000;
-        const PBKDF2_BYTES: usize = 64;
-
         let normalized_salt_cow = {
             let mut cow = Cow::Owned(format!("mnemonic{}", passphrase));
             Mnemonic::normalize_utf8_cow(&mut cow);
@@ -396,7 +393,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn test_vectors_english() {
         // These vectors are tuples of
         // (entropy, mnemonic, seed)
